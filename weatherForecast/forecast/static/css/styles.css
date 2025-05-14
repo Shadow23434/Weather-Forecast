@@ -127,7 +127,7 @@ main {
     }
 
     .day-stats {
-        margin-bottom: 30px;
+        margin-bottom: 20px;
     }
 
     .day-stats__temperature {
@@ -148,6 +148,7 @@ main {
 
     .day-stats_conditions {
         gap: 15px;
+        margin-bottom: 12px;
         width: 95%;
     }
 }
@@ -268,19 +269,34 @@ main.clear {
     gap: 8px;
 }
 
-.geo-input {
-    all: unset;
+/* Django form input styles */
+#id_city {
     flex: 1;
-    min-width: 0;
-    color: rgba(255, 255, 255, 1);
-    font-size: 13px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    background: transparent;
+    border: none;
+    color: white;
+    padding: 0.5rem;
+    font-size: 0.9rem;
+    outline: none;
+}
+
+#id_city::placeholder {
+    color: rgba(255, 255, 255, 0.7);
+}
+
+/* Legacy input styles - keep for compatibility */
+.geo-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: white;
+    padding: 0.5rem;
+    font-size: 0.9rem;
+    outline: none;
 }
 
 .geo-input::placeholder {
-    color: rgba(255, 255, 255, 0.5);
+    color: rgba(255, 255, 255, 0.7);
 }
 
 .search-button,

@@ -7,11 +7,164 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.min.css">
     <link rel="icon" href="{% static 'img/favicon.png' %}" type="img" />
-    <link rel="stylesheet" href="{% static 'css/styles.css' %}?v=1.0.0" />
+    <link rel="stylesheet" href="{% static 'css/styles.css' %}?v=1.0.1" />
     <title>Weather Forecast</title>
+    <style>
+        .tools-button {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background-color: rgba(255, 255, 255, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            color: white;
+            padding: 8px 15px;
+            border-radius: 20px;
+            text-decoration: none;
+            font-size: 14px;
+            backdrop-filter: blur(10px);
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            z-index: 1000;
+        }
+
+        .tools-button:hover {
+            background-color: rgba(255, 255, 255, 0.3);
+            transform: translateY(-2px);
+        }
+
+        .tools-button-fetch {
+            top: 65px;
+            background-color: rgba(40, 167, 69, 0.2);
+            border: 1px solid rgba(40, 167, 69, 0.3);
+        }
+
+        .tools-button-fetch:hover {
+            background-color: rgba(40, 167, 69, 0.3);
+        }
+
+        /* New forecast styles */
+        .forecast {
+            display: flex;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 30px;
+        }
+
+        .forecast-item {
+            background-color: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 15px;
+            width: calc(20% - 16px);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            backdrop-filter: blur(10px);
+            transition: transform 0.3s ease;
+        }
+
+        .forecast-item:hover {
+            transform: translateY(-5px);
+        }
+
+        .forecast-date {
+            font-size: 14px;
+            color: #ffffff;
+            font-weight: bold;
+            margin-bottom: 8px;
+        }
+
+        .forecast-icon {
+            margin: 10px 0;
+        }
+
+        .forecast-description {
+            font-size: 12px;
+            color: #d0d0d0;
+            margin-bottom: 10px;
+        }
+
+        .forecast-temps {
+            display: flex;
+            justify-content: space-around;
+            margin-top: 10px;
+        }
+
+        .forecast-min-temp,
+        .forecast-max-temp {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .forecast-min-temp {
+            color: #8adfff;
+        }
+
+        .forecast-max-temp {
+            color: #ff9d6e;
+        }
+
+        .forecast-temp-value {
+            font-weight: bold;
+        }
+
+        /* Chart container styles */
+        .chart-container {
+            width: 100%;
+            height: 300px !important;
+            /* Force height */
+            min-height: 300px !important;
+            margin: 30px 0;
+            background-color: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+            overflow: hidden;
+            padding: 15px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            position: relative;
+            display: block;
+            /* Ensure it's a block element */
+        }
+
+        #chart {
+            width: 100% !important;
+            height: 270px !important;
+            /* Fixed height */
+            min-height: 270px !important;
+            display: block !important;
+        }
+
+        /* Media queries for responsiveness */
+        @media (max-width: 768px) {
+            .forecast-item {
+                width: calc(33.33% - 10px);
+            }
+
+            .chart-container {
+                height: 200px;
+            }
+        }
+
+        @media (max-width: 576px) {
+            .forecast-item {
+                width: calc(50% - 10px);
+            }
+
+            .chart-container {
+                height: 180px;
+            }
+        }
+    </style>
 </head>
 
 <body data-cod="{{ cod|default:200 }}">
+    <a href="/capitals/" class="tools-button">
+        <i class="bi bi-globe"></i> Capital Cities Data
+    </a>
+    <a href="/capitals/fetch/" class="tools-button tools-button-fetch">
+        <i class="bi bi-cloud-download"></i> Fetch Historical Data
+    </a>
     <main class="{{ description|default:'clear' }}">
         <section class="side-container">
             <form action="" method="POST" id="searchForm">
@@ -150,51 +303,24 @@
                 </div>
             </div>
             <ul class="forecast">
+                {% for day in forecast_days %}
                 <li class="forecast-item">
-                    <p class="forecast-time">{{ time1 }}</p>
-                    <p class="forecast-temperature">
-                        <span class="forecast-temperatureValue">{{ temp1 }}</span>⁰
-                    </p>
-                    <p class="forecastWindText">
-                        Humidity: <span class="forecast-humidityValue">{{ hum1 }}</span>
-                    </p>
+                    <p class="forecast-date">{{ day.date }}</p>
+                    <img src="{% static 'img/icons/' %}{{ day.icon }}.svg" alt="{{ day.description }}"
+                        class="forecast-icon" width="40" height="40">
+                    <p class="forecast-description">{{ day.description }}</p>
+                    <div class="forecast-temps">
+                        <p class="forecast-min-temp">
+                            <i class="bi bi-thermometer-low"></i>
+                            <span class="forecast-temp-value">{{ day.min_temp }}</span>⁰
+                        </p>
+                        <p class="forecast-max-temp">
+                            <i class="bi bi-thermometer-high"></i>
+                            <span class="forecast-temp-value">{{ day.max_temp }}</span>⁰
+                        </p>
+                    </div>
                 </li>
-                <li class="forecast-item">
-                    <p class="forecast-time">{{ time2 }}</p>
-                    <p class="forecast-temperature">
-                        <span class="forecast-temperatureValue">{{ temp2 }}</span>⁰
-                    </p>
-                    <p class="forecastWindText">
-                        Humidity: <span class="forecast-humidityValue">{{ hum2 }}</span>
-                    </p>
-                </li>
-                <li class="forecast-item">
-                    <p class="forecast-time">{{ time3 }}</p>
-                    <p class="forecast-temperature">
-                        <span class="forecast-temperatureValue">{{ temp3 }}</span>⁰
-                    </p>
-                    <p class="forecastWindText">
-                        Humidity: <span class="forecast-humidityValue">{{ hum3 }}</span>
-                    </p>
-                </li>
-                <li class="forecast-item">
-                    <p class="forecast-time">{{ time4 }}</p>
-                    <p class="forecast-temperature">
-                        <span class="forecast-temperatureValue">{{ temp4 }}</span>⁰
-                    </p>
-                    <p class="forecastWindText">
-                        Humidity: <span class="forecast-humidityValue">{{ hum4 }}</span>
-                    </p>
-                </li>
-                <li class="forecast-item">
-                    <p class="forecast-time">{{ time5 }}</p>
-                    <p class="forecast-temperature">
-                        <span class="forecast-temperatureValue">{{ temp5 }}</span>⁰
-                    </p>
-                    <p class="forecastWindText">
-                        Humidity: <span class="forecast-humidityValue">{{ hum5 }}</span>
-                    </p>
-                </li>
+                {% endfor %}
             </ul>
             <div class="chart-container">
                 <canvas id="chart"></canvas>
@@ -220,8 +346,19 @@
             <button onclick="closeModal()">Try Again</button>
         </div>
     </div>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script type="module" src="{% static 'js/chartSetup.js' %}?v=1.0.0"></script>
+    <!-- Load Chart.js first before any other scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js" crossorigin="anonymous"></script>
+    <script>
+        // Check if Chart.js is loaded
+        console.log('Chart.js loaded:', typeof Chart !== 'undefined');
+
+        // Disable Chart.js animations globally to prevent storage access errors
+        if (typeof Chart !== 'undefined') {
+            Chart.defaults.animation = false;
+        }
+    </script>
+    <!-- Then load our custom scripts -->
+    <script src="{% static 'js/chartSetup.js' %}?v=1.0.5"></script>
     <script type="module" src="{% static 'js/handleModal.js' %}?v=1.0.0"></script>
     <script type="module" src="{% static 'js/searchInput.js' %}?v=1.0.0"></script>
     <script type="module" src="{% static 'js/tempSlider.js' %}?v=1.0.0"></script>

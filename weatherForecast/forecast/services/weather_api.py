@@ -1,5 +1,5 @@
 import requests
-from .config import API_KEY, BASE_URL, DEFAULT_CITY
+from .config import OPEN_WEATHER_API_KEY, CURRENT_WEATHER_URL, DEFAULT_CITY
 
 # Dictionary mapping country codes to full country names
 COUNTRY_NAMES = {
@@ -63,8 +63,11 @@ def get_current_weather(city):
             'cod': 400,
             'message': "Nothing to geocode"
         }
+    
+    # Make sure city is lowercase and properly trimmed
+    city = normalize_city_name(city)
         
-    url = f"{BASE_URL}weather?q={city}&appid={API_KEY}&units=metric"
+    url = f"{CURRENT_WEATHER_URL}weather?q={city}&appid={OPEN_WEATHER_API_KEY}&units=metric"
     try:
         response = requests.get(url)
         data = response.json()
@@ -112,6 +115,20 @@ def get_current_weather(city):
             'message': f"An unexpected error occurred: {str(e)}"
         }
 
+def normalize_city_name(city_name):
+    """
+    Standardize city names for consistent comparison without modifying original data
+    
+    Args:
+        city_name (str): City name to normalize
+        
+    Returns:
+        str: Normalized city name (lowercase, stripped)
+    """
+    if not city_name or not isinstance(city_name, str):
+        return ""
+    return city_name.lower().strip()
+
 # Get City from IP Address
 def get_city_from_ip(request):
     try:
@@ -124,24 +141,25 @@ def get_city_from_ip(request):
         
         print(ip)
         if not ip:
-            return DEFAULT_CITY
+            return normalize_city_name(DEFAULT_CITY)
         
         # Use ip-api.com for geolocation
         response = requests.get(f'http://ip-api.com/json/{ip}', timeout=5)
         if response.status_code != 200:
-            return DEFAULT_CITY
+            return normalize_city_name(DEFAULT_CITY)
             
         data = response.json()
         if data.get('status') == 'success' and data.get('city'):
-            return data['city']
+            # Return city name in lowercase for consistent matching
+            return normalize_city_name(data['city'])
         else:
-            return DEFAULT_CITY
+            return normalize_city_name(DEFAULT_CITY)
             
     except requests.exceptions.RequestException:
-        return DEFAULT_CITY
+        return normalize_city_name(DEFAULT_CITY)
     except Exception as e:
         print(f"Error in get_city_from_ip: {str(e)}")
-        return DEFAULT_CITY
+        return normalize_city_name(DEFAULT_CITY)
 
 def get_weather_icon(description):
     """Map weather description to appropriate icon type"""

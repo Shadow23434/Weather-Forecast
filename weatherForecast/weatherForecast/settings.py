@@ -21,9 +21,13 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 env = environ.Env()
 environ.Env.read_env(env_file=os.path.join(BASE_DIR, '.env'))  # Read .env file
 
-API_KEY = env('API_KEY')
-BASE_URL = env('BASE_URL') # OpenWeatherMapAPI
+OPEN_WEATHER_API_KEY = env('OPEN_WEATHER_API_KEY')
+CURRENT_WEATHER_URL = env('CURRENT_WEATHER_URL') # OpenWeatherMapAPI
+HISTORICAL_WEATHER_URL = env('HISTORICAL_WEATHER_URL') # OpenWeatherMapAPI
 FLAG_URL = env('FLAG_URL')
+NOAA_API_TOKEN=env('NOAA_API_TOKEN')
+NOAA_API_BASE_URL=env('NOAA_API_BASE_URL')
+NOAA_DATASET_ID =env('NOAA_DATASET_ID')
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/

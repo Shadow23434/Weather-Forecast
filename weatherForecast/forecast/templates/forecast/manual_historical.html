@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Manual Historical Weather Data Fetch</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .country-card {
+            margin-bottom: 20px;
+            transition: transform 0.2s;
+        }
+
+        .country-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
+        }
+
+        .flag-img {
+            width: 30px;
+            margin-right: 10px;
+        }
+
+        .result-message {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 5px;
+        }
+
+        .result-success {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+
+        .result-error {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+
+        /* Loading overlay styles */
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.7);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+            color: white;
+            display: none;
+        }
+
+        .spinner-container {
+            text-align: center;
+        }
+
+        .spinner-border {
+            width: 4rem;
+            height: 4rem;
+        }
+
+        .loading-text {
+            margin-top: 1rem;
+            font-size: 1.2rem;
+        }
+
+        .progress {
+            width: 60%;
+            max-width: 500px;
+            margin-top: 1rem;
+            height: 0.8rem;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Loading overlay -->
+    <div id="loadingOverlay" class="loading-overlay">
+        <div class="spinner-container">
+            <div class="spinner-border text-light" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <div class="loading-text" id="loadingText">Fetching historical weather data...</div>
+            <div class="progress">
+                <div id="loadingProgressBar" class="progress-bar progress-bar-striped progress-bar-animated"
+                    role="progressbar" style="width: 0%"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="container mt-5">
+        <h1 class="mb-4">Fetch Historical Weather Data</h1>
+        <p class="lead">Use this tool to manually fetch and store historical weather data for capital cities.</p>
+
+        <div class="row mb-4">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">Fetch Historical Data</h5>
+                        <form method="POST" action="" id="fetchDataForm">
+                            {% csrf_token %}
+                            <div class="mb-3">
+                                <label for="country_code" class="form-label">Country</label>
+                                <select class="form-select" id="country_code" name="country_code">
+                                    <option value="">All Countries</option>
+                                    {% for country_code, capital in countries_and_capitals %}
+                                    <option value="{{ country_code }}">{{ country_code }} - {{ capital }}</option>
+                                    {% endfor %}
+                                </select>
+                                <div class="form-text">Select a specific country or leave blank to fetch data for all
+                                    capitals</div>
+                            </div>
+                            <div class="mb-3">
+                                <label for="days" class="form-label">Days of Historical Data</label>
+                                <input type="number" class="form-control" id="days" name="days" value="3650" min="1"
+                                    max="3650">
+                                <div class="form-text">Number of days back to fetch. NOAA API is limited to 365 days,
+                                    Open-Meteo supports up to 10 years (3650 days)</div>
+                            </div>
+                            <div class="mb-3">
+                                <label for="source" class="form-label">Data Source</label>
+                                <select class="form-select" id="source" name="source" onchange="updateDaysLimit()">
+                                    <option value="noaa">NOAA Climate Data API</option>
+                                    <option value="open_meteo" selected>Open-Meteo API</option>
+                                </select>
+                                <div class="form-text">Choose the data source for historical weather information</div>
+                            </div>
+                            <button type="submit" class="btn btn-primary" id="fetchButton">Fetch Data</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">Available Countries</h5>
+                        <p class="card-text">We have data for {{ count }} capital cities around the world.</p>
+                        <a href="/" class="btn btn-primary">Back to Home</a>
+                        <a href="/capitals/" class="btn btn-outline-primary">View Capital Cities</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {% if result_message %}
+        <div
+            class="result-message {% if 'Error' in result_message or 'Could not' in result_message or 'No' in result_message %}result-error{% else %}result-success{% endif %}">
+            <p>{{ result_message }}</p>
+            {% if file_path %}
+            <p>File saved to: <code>{{ file_path }}</code></p>
+            {% endif %}
+        </div>
+        {% endif %}
+
+        <h2 class="mb-4 mt-5">How to Use This Tool</h2>
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">Instructions</h5>
+                <ol>
+                    <li>Select a specific country from the dropdown menu, or leave it blank to fetch data for all
+                        capitals</li>
+                    <li>Choose how many days of historical data you want to retrieve (more days = more data)</li>
+                    <li>Choose the data source for historical weather information</li>
+                    <li>Click "Fetch Data" to start the process</li>
+                    <li>The data will be saved to CSV files in the data directory</li>
+                    <li>These files can be used for weather pattern analysis and machine learning</li>
+                </ol>
+                <div class="alert alert-info">
+                    <strong>Note:</strong> Fetching data for all countries may take several minutes due to API rate
+                    limits. Fetching large amounts of historical data (more than 30 days) may take longer and will
+                    create larger files.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <footer class="bg-light py-4 mt-5">
+        <div class="container text-center">
+            <p>&copy; {% now "Y" %} Weather Forecast App. All rights reserved.</p>
+        </div>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+
+    <script>
+        // Function to update the maximum days limit based on the selected data source
+        function updateDaysLimit() {
+            const sourceSelect = document.getElementById('source');
+            const daysInput = document.getElementById('days');
+
+            if (sourceSelect.value === 'noaa') {
+                // NOAA API is limited to 1 year
+                daysInput.max = 365;
+
+                // If current value exceeds the limit, adjust it
+                if (parseInt(daysInput.value) > 365) {
+                    daysInput.value = 365;
+                }
+
+                daysInput.nextElementSibling.innerHTML =
+                    'Number of days back to fetch. NOAA API is limited to 365 days.';
+            } else {
+                // Open-Meteo supports up to 10 years
+                daysInput.max = 3650;
+                daysInput.value = daysInput.value || 3650; // Set to 3650 if empty
+                daysInput.nextElementSibling.innerHTML =
+                    'Number of days back to fetch. Open-Meteo supports up to 10 years (3650 days).';
+            }
+        }
+
+        // Loading animation functions
+        function showLoading() {
+            document.getElementById('loadingOverlay').style.display = 'flex';
+            startProgressAnimation();
+        }
+
+        function hideLoading() {
+            document.getElementById('loadingOverlay').style.display = 'none';
+            stopProgressAnimation();
+        }
+
+        let progressInterval;
+        function startProgressAnimation() {
+            const progressBar = document.getElementById('loadingProgressBar');
+            const loadingText = document.getElementById('loadingText');
+            let progress = 0;
+
+            // Reset progress bar
+            progressBar.style.width = '0%';
+
+            // Determine if we're fetching all countries or a single country
+            const countryCode = document.getElementById('country_code').value;
+            const days = parseInt(document.getElementById('days').value);
+            const source = document.getElementById('source').value;
+
+            // Customize loading text based on selection
+            if (!countryCode) {
+                loadingText.textContent = `Fetching data for all capital cities (${days} days)...`;
+            } else {
+                const selectedOption = document.querySelector(`#country_code option[value="${countryCode}"]`);
+                const countryName = selectedOption ? selectedOption.textContent : countryCode;
+                loadingText.textContent = `Fetching data for ${countryName} (${days} days)...`;
+            }
+
+            // Calculate estimated completion time based on days and source
+            let estimatedDuration = 10000; // Base 10 seconds
+
+            if (!countryCode) {
+                // Fetching all countries will take longer
+                estimatedDuration = 30000 + (days * 10); // 30 seconds + 10ms per day
+            } else {
+                estimatedDuration = 5000 + (days * 5); // 5 seconds + 5ms per day
+            }
+
+            // Open-Meteo is typically faster than NOAA
+            if (source === 'noaa') {
+                estimatedDuration *= 1.5; // NOAA is slower
+            }
+
+            const incrementAmount = 100 / (estimatedDuration / 100); // Increase by small amounts
+
+            progressInterval = setInterval(() => {
+                // Slow down as we approach 90%
+                if (progress < 90) {
+                    progress += incrementAmount;
+                } else {
+                    progress += incrementAmount / 10; // Slow down near the end
+                }
+
+                // Cap at 95% - the rest happens when the response comes back
+                if (progress > 95) {
+                    progress = 95;
+                    clearInterval(progressInterval);
+                }
+
+                progressBar.style.width = `${progress}%`;
+            }, 100);
+        }
+
+        function stopProgressAnimation() {
+            if (progressInterval) {
+                clearInterval(progressInterval);
+            }
+
+            // Quickly complete the progress bar
+            const progressBar = document.getElementById('loadingProgressBar');
+            progressBar.style.width = '100%';
+        }
+
+        // Initialize the form based on the default selection
+        document.addEventListener('DOMContentLoaded', function () {
+            updateDaysLimit();
+
+            // Add event listener to the form
+            document.getElementById('fetchDataForm').addEventListener('submit', function () {
+                showLoading();
+                // Allow the form to submit normally
+                return true;
+            });
+
+            // If we have a result message, hide the loading overlay
+            if (document.querySelector('.result-message')) {
+                hideLoading();
+            }
+        });
+    </script>
+</body>
+
+</html>

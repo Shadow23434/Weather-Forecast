@@ -1,11 +1,51 @@
+// Wait for DOM to be fully loaded
 document.addEventListener('DOMContentLoaded', () => {
     console.log('Chart setup started');
+
+    // Make sure Chart.js is loaded
+    if (typeof Chart === 'undefined') {
+        console.error('Chart.js not loaded! Please check the script inclusion.');
+
+        // Try to load Chart.js dynamically if it's not available
+        const chartScript = document.createElement('script');
+        chartScript.src = 'https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js';
+        chartScript.onload = initChart;
+        document.head.appendChild(chartScript);
+        return;
+    }
+
+    // Use setTimeout to ensure DOM is fully rendered
+    setTimeout(initChart, 500);
+});
+
+// Separate function to initialize the chart
+function initChart() {
+    console.log('Initializing chart...');
+
     const chartElement = document.getElementById('chart');
     if (!chartElement) {
-        console.error('Canvas Element not found!')
+        console.error('Canvas Element not found!');
         return;
     }
     console.log('Canvas element found');
+
+    // Set explicit dimensions on the canvas element
+    chartElement.style.height = '270px';
+    chartElement.height = 270; // Set the height attribute
+    chartElement.style.width = '100%';
+
+    const chartContainer = document.querySelector('.chart-container');
+    if (chartContainer) {
+        // Ensure container is visible with proper dimensions
+        chartContainer.style.display = 'block';
+        chartContainer.style.height = '300px';
+        chartContainer.style.minHeight = '300px';
+    }
+
+    // Check if canvas is visible and has dimensions
+    const chartWidth = chartElement.offsetWidth;
+    const chartHeight = chartElement.offsetHeight || 270; // Use default if 0
+    console.log('Chart dimensions:', chartWidth, 'x', chartHeight);
 
     const ctx = chartElement.getContext('2d');
 
@@ -17,39 +57,47 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
     }
 
-    const temps = [];
-    const times = [];
+    const avgTemps = [];
+    const dates = [];
     const forecastItemsArray = Array.from(forecastItems);
 
     forecastItemsArray.forEach((item, index) => {
-        const timeElement = item.querySelector('.forecast-time');
-        const tempElement = item.querySelector('.forecast-temperatureValue');
+        const dateElement = item.querySelector('.forecast-date');
+        const minTempElement = item.querySelector('.forecast-min-temp .forecast-temp-value');
+        const maxTempElement = item.querySelector('.forecast-max-temp .forecast-temp-value');
 
-        if (!timeElement || !tempElement) {
+        if (!dateElement || !minTempElement || !maxTempElement) {
             console.error(`Missing elements in forecast item ${index}:`, {
-                timeElement: !!timeElement,
-                tempElement: !!tempElement
+                dateElement: !!dateElement,
+                minTempElement: !!minTempElement,
+                maxTempElement: !!maxTempElement
             });
             return;
         }
 
-        const time = timeElement.textContent;
-        const temp = tempElement.textContent;
+        const date = dateElement.textContent;
+        const minTemp = parseFloat(minTempElement.textContent);
+        const maxTemp = parseFloat(maxTempElement.textContent);
 
-        if (time && temp) {
-            times.push(time);
-            const tempValue = parseFloat(temp);
-            if (!isNaN(tempValue)) {
-                temps.push(tempValue);
-            }
+        if (date && !isNaN(minTemp) && !isNaN(maxTemp)) {
+            dates.push(date);
+
+            // Calculate average temperature for the day
+            const avgTemp = (minTemp + maxTemp) / 2;
+            avgTemps.push(parseFloat(avgTemp.toFixed(1)));
         }
     });
 
     // Ensure all values are valid before using them
-    if (temps.length === 0 || times.length === 0) {
-        console.error('Temp or time values are missing!');
+    if (avgTemps.length === 0 || dates.length === 0) {
+        console.error('Temperature or date values are missing!');
         return;
     }
+
+    console.log('Chart data prepared:', {
+        dates: dates,
+        avgTemps: avgTemps
+    });
 
     try {
         // Destroy existing chart if it exists
@@ -57,33 +105,48 @@ document.addEventListener('DOMContentLoaded', () => {
             window.temperatureChart.destroy();
         }
 
-        // Create new chart
+        // Disable animations to prevent storage access errors
+        Chart.defaults.animation = false;
+
+        // Create simplified chart with only average temperature
         window.temperatureChart = new Chart(ctx, {
             type: 'line',
             data: {
-                labels: times,
+                labels: dates,
                 datasets: [
                     {
-                        data: temps,
+                        label: 'Average Temperature',
+                        data: avgTemps,
                         borderColor: '#2DBEBE', // Turquoise color
-                        backgroundColor: 'transparent',
+                        backgroundColor: 'rgba(45, 190, 190, 0.1)',
                         borderWidth: 3,
                         tension: 0.4, // Make the line curved
-                        fill: false,
-                        pointRadius: 5, // Show small points
+                        fill: true,
+                        pointRadius: 6, // Larger points for better visibility
                         pointBackgroundColor: '#2DBEBE', // Match line color
                         pointBorderColor: 'white',
-                        pointBorderWidth: 1,
-                        pointHoverRadius: 6
-                    },
+                        pointBorderWidth: 2,
+                        pointHoverRadius: 8
+                    }
                 ],
             },
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
+                animation: false, // Disable animations to prevent storage access issues
                 plugins: {
                     legend: {
-                        display: false
+                        display: true,
+                        position: 'top',
+                        labels: {
+                            color: 'rgba(255, 255, 255, 0.7)',
+                            boxWidth: 15,
+                            padding: 10,
+                            font: {
+                                size: 12,
+                                weight: 'bold'
+                            }
+                        }
                     },
                     tooltip: {
                         enabled: true,
@@ -91,10 +154,13 @@ document.addEventListener('DOMContentLoaded', () => {
                         titleFont: { size: 12 },
                         bodyFont: { size: 12 },
                         padding: 8,
-                        displayColors: false,
+                        displayColors: true,
                         callbacks: {
                             label: function (context) {
-                                return `${context.parsed.y}°`;
+                                return `${context.dataset.label}: ${context.parsed.y}°C`;
+                            },
+                            title: function (tooltipItems) {
+                                return `${tooltipItems[0].label}`;
                             }
                         }
                     }
@@ -103,67 +169,49 @@ document.addEventListener('DOMContentLoaded', () => {
                     x: {
                         display: true,
                         grid: {
-                            display: false
+                            display: false,
+                            color: 'rgba(255, 255, 255, 0.1)'
                         },
                         ticks: {
                             color: 'rgba(255, 255, 255, 0.7)',
                             font: {
-                                size: 0 // Hide text but keep positions
+                                size: 11
                             },
                             maxRotation: 0,
                             minRotation: 0
-                        },
-                        afterTickToLabelConversion: function (scaleInstance) {
-                            // This sets all labels to blank to hide them but keep spacing
-                            scaleInstance.ticks.forEach(function (tick) {
-                                tick.label = '';
-                            });
                         }
                     },
                     y: {
-                        display: false,
+                        display: true,
                         grid: {
-                            display: false
+                            display: true,
+                            color: 'rgba(255, 255, 255, 0.1)'
                         },
-                        min: Math.min(...temps) - 3,
-                        max: Math.max(...temps) + 3
+                        ticks: {
+                            color: 'rgba(255, 255, 255, 0.7)',
+                            font: {
+                                size: 11
+                            },
+                            callback: function (value) {
+                                return value + '°C';
+                            }
+                        },
+                        min: Math.min(...avgTemps) - 2,
+                        max: Math.max(...avgTemps) + 2
                     },
-                },
-                animation: {
-                    duration: 1000
                 },
                 layout: {
                     padding: {
-                        top: 15,
-                        right: 15,
-                        bottom: 15,
-                        left: 15
+                        top: 20,
+                        right: 20,
+                        bottom: 10,
+                        left: 10
                     }
                 }
-            },
-            plugins: [{
-                id: 'alignForecastItems',
-                afterRender: (chart) => {
-                    // Get the horizontal positions of each point in the chart
-                    const chartPoints = chart.getDatasetMeta(0).data;
-                    const forecastContainer = document.querySelector('.forecast');
-
-                    if (!forecastContainer || chartPoints.length !== forecastItemsArray.length) {
-                        return;
-                    }
-
-                    // Adjust chart container width to match the forecast container
-                    const chartContainer = document.querySelector('.chart-container');
-                    if (chartContainer) {
-                        chartContainer.style.width = forecastContainer.offsetWidth + 'px';
-                        chartContainer.style.marginLeft = 'auto';
-                        chartContainer.style.marginRight = 'auto';
-                    }
-                }
-            }]
+            }
         });
         console.log('Chart created successfully');
     } catch (error) {
         console.error('Error creating chart:', error);
     }
-});
+}
