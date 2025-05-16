@@ -13,48 +13,37 @@ from .forms import WeatherForm
 # Import services
 from .services import (
     get_current_weather, get_city_from_ip, get_weather_icon, normalize_city_name,
-    read_historical_data, prepare_data, train_rain_model,
-    prepare_regression_data, train_regression_model,
-    predict_future, map_wind_direction,
+    read_historical_data, prepare_regression_data, train_regression_model,
     format_future_times, calculate_temp_percentage,
-    enrich_historical_data,
+    enrich_historical_data, predict_future_stacking,
     get_capital_city, get_all_countries_and_capitals, fetch_capital_historical_data,
     fetch_all_capitals_historical_data, find_city_historical_data,
     get_all_capitals_with_coordinates, SOURCE_NOAA, SOURCE_OPEN_METEO
 )
 from .services.config import DEFAULT_CITY, HISTORICAL_DATA_PATH, FORECAST_DAYS, FLAG_URL
 
-# Weather Analysis Function
 def weather_view(request):
     if request.method == 'POST':
         form = WeatherForm(request.POST)
         if form.is_valid():
             city = form.cleaned_data['city']
-            # Normalize city name
             city = normalize_city_name(city)
         else:
             city = get_city_from_ip(request)
     else:
         form = WeatherForm()
         city = request.GET.get('city', '')
-        
         if not city:
-            # Try to get city from IP address
             city = get_city_from_ip(request)
         else:
-            # Normalize city name from GET parameter
             city = normalize_city_name(city)
     
-    # Handle empty city name by using default city
     if not city:
         city = normalize_city_name(DEFAULT_CITY)
     
-    # Get current weather data for the specified city
     current_weather = get_current_weather(city)
-    
     cod = current_weather.get('cod', 500)
     
-    # Handle errors
     if cod != 200:
         context = {
             'cod': cod,
@@ -65,74 +54,90 @@ def weather_view(request):
         }
         return render(request, 'weather.html', context)
 
-    # Get weather icon type based on description
     icon_type = get_weather_icon(current_weather['description'])
 
-    # Find historical data file that matches the city or country code
     try:
         country_code = current_weather.get('country_code')
         historical_data_file = find_city_historical_data(
-            HISTORICAL_DATA_PATH, 
-            city=city, 
-            country_code=country_code, 
-            default_file="weather.csv"
+            HISTORICAL_DATA_PATH, city=city, country_code=country_code, default_file="weather.csv"
         )
-        
-        print(historical_data_file)
-        # Load historical data from the matched file
+        print("historical_data_file: ", historical_data_file)
         historical_data = read_historical_data(historical_data_file)
         
-        # If the historical data is empty, try to find alternative sources
         if historical_data.empty:
-            # Try the default weather.csv file as fallback
             if historical_data_file != os.path.join(HISTORICAL_DATA_PATH, "weather.csv"):
                 default_file_path = os.path.join(HISTORICAL_DATA_PATH, "weather.csv")
                 if os.path.exists(default_file_path):
                     historical_data = read_historical_data(default_file_path)
         else:
-            # Add city column if it doesn't exist
             if 'city' not in historical_data.columns:
-                # Add city column to file data so it can be properly used
                 historical_data['city'] = city
-    except Exception as e:
-        historical_data = pd.DataFrame()  # Use empty DataFrame as fallback
-    
-    # Load and enhance historical data
+    except Exception:
+        historical_data = pd.DataFrame()
+
     enhanced_data = enrich_historical_data(historical_data, city)
-
-    # Prepare data for temperature prediction only
     X_temp, y_temp = prepare_regression_data(enhanced_data)
-    temp_model = train_regression_model(X_temp, y_temp)
-
-    # Predict future daily temperature (5 days)
-    forecast = predict_future(temp_model, current_weather['current_temp'], 
-                            feature_name='Temp', 
-                            past_window=3,
-                            days=FORECAST_DAYS)
-
-    # Get forecast dates
-    forecast_dates = format_future_times(days=FORECAST_DAYS)
     
-    # Create a list of forecast days with all information
+    try:
+        rf_model, xgb_model, meta_model, rmse, mae, r2, lstm_model, lgbm_model = train_regression_model(X_temp, y_temp)
+    except Exception as e:
+        print("[ERROR] train_regression_model:", e)
+        rf_model = xgb_model = meta_model = lstm_model = lgbm_model = None
+        rmse = mae = r2 = None
+
+    print("rmse: ", rmse, "mae: ", mae, "r2: ", r2)
+
+    try:
+        forecast = predict_future_stacking(
+            rf_model, xgb_model, meta_model, current_weather['current_temp'],
+            feature_name='Temp', past_window=3, days=FORECAST_DAYS, lstm_model=lstm_model, lgbm_model=lgbm_model
+        )
+    except Exception as e:
+        print("[ERROR] predict_future_stacking:", e)
+        forecast = {'min_temps': [None]*FORECAST_DAYS, 'max_temps': [None]*FORECAST_DAYS, 'descriptions': [None]*FORECAST_DAYS}
+
+    # LightGBM pipeline forecast
+    min_required_rows = 10
+    try:
+        if enhanced_data is not None and len(enhanced_data.dropna()) >= min_required_rows:
+            lgbm_forecast = forecast_with_lightgbm(enhanced_data, days=FORECAST_DAYS)
+        else:
+            print("[LightGBM] Skipped: Not enough valid data for LightGBM training.")
+            lgbm_forecast = {
+                'min_temps': [None]*FORECAST_DAYS,
+                'max_temps': [None]*FORECAST_DAYS,
+                'descriptions': [None]*FORECAST_DAYS,
+                'min_rmse': None,
+                'max_rmse': None,
+                'desc_acc': None
+            }
+    except Exception as e:
+        print("[ERROR] forecast_with_lightgbm:", e)
+        lgbm_forecast = {
+            'min_temps': [None]*FORECAST_DAYS,
+            'max_temps': [None]*FORECAST_DAYS,
+            'descriptions': [None]*FORECAST_DAYS,
+            'min_rmse': None,
+            'max_rmse': None,
+            'desc_acc': None
+        }
+
+    forecast_dates = format_future_times(days=FORECAST_DAYS)
     forecast_days = []
     for i in range(FORECAST_DAYS):
         day_forecast = {
             'date': forecast_dates[i],
-            'min_temp': forecast['min_temps'][i],
-            'max_temp': forecast['max_temps'][i],
-            'description': forecast['descriptions'][i],
-            'icon': get_weather_icon(forecast['descriptions'][i])
+            'min_temp': forecast['min_temps'][i] if forecast['min_temps'] else None,
+            'max_temp': forecast['max_temps'][i] if forecast['max_temps'] else None,
+            'description': forecast['descriptions'][i] if forecast['descriptions'] else None,
+            'icon': get_weather_icon(forecast['descriptions'][i]) if forecast['descriptions'] else None
         }
         forecast_days.append(day_forecast)
 
-    # Calculate temperature percentage for slider
     temp_percentage = calculate_temp_percentage(
-        current_weather['temp_min'], 
-        current_weather['temp_max'], 
-        current_weather['current_temp']
+        current_weather['temp_min'], current_weather['temp_max'], current_weather['current_temp']
     )
 
-    # Prepare context for template
     context = {
         'cod': cod,
         'location': city,
@@ -152,12 +157,16 @@ def weather_view(request):
         'wind': current_weather['wind_gust_speed'],
         'pressure': current_weather['pressure'],
         'visibility': current_weather['visibility'],
-        
         'forecast_days': forecast_days,
-        
         'temp_percentage': temp_percentage,
         'FLAG_URL': FLAG_URL,
-        'form': form
+        'form': form,
+        'rmse': rmse,
+        'mae': mae,
+        'r2': r2,
+        'lgbm_min_rmse': lgbm_forecast.get('min_rmse'),
+        'lgbm_max_rmse': lgbm_forecast.get('max_rmse'),
+        'lgbm_desc_acc': lgbm_forecast.get('desc_acc')
     }
 
     return render(request, 'weather.html', context)
@@ -284,4 +293,3 @@ def manual_historical_data(request):
     }
     
     return render(request, 'forecast/manual_historical.html', context)
-      

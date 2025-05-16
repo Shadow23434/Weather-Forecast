@@ -1,13 +1,22 @@
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.metrics import mean_squared_error
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from xgboost import XGBRegressor
+from sklearn.linear_model import LinearRegression
+import lightgbm as lgb
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, Dropout
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.callbacks import EarlyStopping
+
 import os
 from datetime import datetime, timedelta
 from .config import RANDOM_FOREST_PARAMS, TEST_SIZE, RANDOM_STATE, FORECAST_DAYS, DATA_DIRECTORY
 from .weather_api import normalize_city_name
+
 
 def read_historical_data(path):
     """
@@ -422,123 +431,116 @@ def prepare_regression_data(data, feature='Temp', window_size=3):
     
     return X, y
 
-def train_regression_model(X, y):
+def train_lstm_model(X, y, epochs=30, batch_size=16):
     """
-    Train random forest regression model
-    
+    Huấn luyện mô hình LSTM cho dự báo thời tiết.
     Args:
-        X (DataFrame): Feature matrix
-        y (Series): Target variable
-    
+        X (DataFrame): Dữ liệu đầu vào (n_samples, n_features)
+        y (Series): Nhãn đầu ra
     Returns:
-        RandomForestRegressor: Trained model
+        model: Mô hình LSTM đã huấn luyện
     """
-    # Basic validation
-    if X is None or y is None:
-        # Create a simple default model with minimal training data
+    import numpy as np
+    # Đảm bảo X là numpy array
+    X_np = np.array(X)
+    y_np = np.array(y)
+    # LSTM yêu cầu input shape: (samples, timesteps, features)
+    # Ở đây, mỗi sample là 1 chuỗi các giá trị lag, coi như 1 timestep
+    X_lstm = X_np.reshape((X_np.shape[0], X_np.shape[1], 1))
+    model = Sequential()
+    model.add(LSTM(32, input_shape=(X_lstm.shape[1], 1), return_sequences=False))
+    model.add(Dropout(0.2))
+    model.add(Dense(16, activation='relu'))
+    model.add(Dense(1))
+    model.compile(optimizer=Adam(learning_rate=0.001), loss='mse')
+    es = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+    model.fit(X_lstm, y_np, epochs=epochs, batch_size=batch_size, validation_split=0.2, callbacks=[es], verbose=0)
+    return model
+
+def train_regression_model(X, y):
+    # Loại bỏ các feature toàn NaN hoặc hằng số
+    X = X.loc[:, X.nunique() > 1]
+    X = X.dropna(axis=1, how='all')
+    if X.empty or y is None or y.empty:
         X_default = pd.DataFrame({f'Temp_lag_{i}': [20 + i + j*0.1 for j in range(10)] for i in range(1, 4)})
         y_default = pd.Series([20 + i*0.2 for i in range(10)])
-        model = RandomForestRegressor(n_estimators=10, max_depth=3, random_state=RANDOM_STATE)
-        model.fit(X_default, y_default)
-        return model
-    
-    # Ensure minimum data size for training
+        scaler = StandardScaler().fit(X_default)
+        X_default_scaled = scaler.transform(X_default)
+        rf_model = RandomForestRegressor(n_estimators=10, max_depth=3, random_state=RANDOM_STATE)
+        rf_model.fit(X_default_scaled, y_default)
+        lstm_model = train_lstm_model(X_default_scaled, y_default)
+        lgbm_model = None
+        if lgb is not None:
+            lgbm_model = lgb.LGBMRegressor(n_estimators=10, max_depth=3, min_data_in_leaf=1, min_data_in_bin=1, random_state=RANDOM_STATE)
+            lgbm_model.fit(X_default_scaled, y_default)
+        return rf_model, None, None, None, None, None, lstm_model, lgbm_model
+
     if len(X) < 10:
-        # Augment with synthetic data to ensure stable training
-        X_synthetic = pd.DataFrame({
-            col: [row[i] + np.random.normal(0, 0.5) for i, col in enumerate(X.columns)] 
-            for row in X.values for _ in range(2)  # Duplicate each row with small variations
-        })
-        y_synthetic = pd.Series([val + np.random.normal(0, 0.5) for val in y for _ in range(2)])
-        
-        # Combine original and synthetic data
-        X = pd.concat([X, X_synthetic])
-        y = pd.concat([y, y_synthetic])
-    
-    # Split data
+        n_needed = 10 - len(X)
+        X_synthetic = pd.DataFrame({col: [X[col].mean() + np.random.normal(0, 1) for _ in range(n_needed)] for col in X.columns})
+        y_synthetic = pd.Series([y.mean() + np.random.normal(0, 1) for _ in range(n_needed)])
+        X = pd.concat([X, X_synthetic], ignore_index=True)
+        y = pd.concat([y, y_synthetic], ignore_index=True)
+
+    # Chuẩn hóa dữ liệu
+    scaler = StandardScaler().fit(X)
+    X_scaled = scaler.transform(X)
+
     try:
         X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=TEST_SIZE, random_state=RANDOM_STATE
+            X_scaled, y, test_size=TEST_SIZE, random_state=RANDOM_STATE
         )
     except ValueError:
-        # If split fails, use all data for training
-        X_train, y_train = X, y
-        X_test, y_test = X.iloc[:1], y.iloc[:1]  # Minimal test set
-    
-    # Create and train model with more robust parameters
-    model_params = {
-        'n_estimators': 50,
-        'max_depth': 10,
-        'min_samples_split': 2,
-        'min_samples_leaf': 1,
-        'random_state': RANDOM_STATE
-    }
-    model = RandomForestRegressor(**model_params)
-    
-    try:
-        model.fit(X_train, y_train)
-        
-        # Evaluate model
-        train_pred = model.predict(X_train)
-        test_pred = model.predict(X_test)
-        
-        train_rmse = np.sqrt(mean_squared_error(y_train, train_pred))
-        test_rmse = np.sqrt(mean_squared_error(y_test, test_pred))
-        
-        return model
-    except Exception as e:
-        # If model training fails, create a simple alternative model
-        simple_model = RandomForestRegressor(n_estimators=10, max_depth=3, random_state=RANDOM_STATE)
-        
-        # Create simplified synthetic data guaranteed to work
-        X_simple = pd.DataFrame({f'feature_{i}': np.random.normal(0, 1, size=20) for i in range(X.shape[1])})
-        y_simple = pd.Series(np.random.normal(y.mean() if not y.empty else 20, 1, size=20))
-        
-        # Train simple model
-        simple_model.fit(X_simple, y_simple)
-        
-        # Set feature names to match expected input
-        simple_model.feature_names_in_ = X.columns.values
-        
-        return simple_model
+        X_train, y_train = X_scaled, y
+        X_test, y_test = X_scaled[:1], y.iloc[:1]
 
-def predict_future(model, current_value, feature_name='Temp', past_window=3, days=5):
+    rf_params = {'n_estimators': 50, 'max_depth': 10, 'min_samples_split': 2, 'min_samples_leaf': 1, 'random_state': RANDOM_STATE}
+    rf_model = RandomForestRegressor(**rf_params)
+    rf_model.fit(X_train, y_train)
+    rf_pred = rf_model.predict(X_test)
+    print(f"RandomForest RMSE: {np.sqrt(mean_squared_error(y_test, rf_pred)):.3f}, MAE: {mean_absolute_error(y_test, rf_pred):.3f}, R2: {r2_score(y_test, rf_pred):.3f}")
+
+    xgb_params = {'n_estimators': 50, 'max_depth': 6, 'learning_rate': 0.1, 'random_state': RANDOM_STATE}
+    xgb_model = XGBRegressor(**xgb_params)
+    xgb_model.fit(X_train, y_train)
+    xgb_pred = xgb_model.predict(X_test)
+    print(f"XGBoost RMSE: {np.sqrt(mean_squared_error(y_test, xgb_pred)):.3f}, MAE: {mean_absolute_error(y_test, xgb_pred):.3f}, R2: {r2_score(y_test, xgb_pred):.3f}")
+
+    lgbm_model = None
+    lgbm_pred = np.zeros_like(rf_pred)
+    if lgb is not None and X_train.shape[1] > 0:
+        lgbm_model = lgb.LGBMRegressor(n_estimators=50, max_depth=10, min_data_in_leaf=1, min_data_in_bin=1, random_state=RANDOM_STATE)
+        lgbm_model.fit(X_train, y_train, eval_set=[(X_test, y_test)])
+        lgbm_pred = lgbm_model.predict(X_test)
+        print(f"LightGBM RMSE: {np.sqrt(mean_squared_error(y_test, lgbm_pred)):.3f}, MAE: {mean_absolute_error(y_test, lgbm_pred):.3f}, R2: {r2_score(y_test, lgbm_pred):.3f}")
+
+    lstm_model = train_lstm_model(X_train, y_train)
+    X_test_lstm = np.array(X_test).reshape((X_test.shape[0], X_test.shape[1], 1))
+    lstm_pred = lstm_model.predict(X_test_lstm, verbose=0).flatten()
+    print(f"LSTM RMSE: {np.sqrt(mean_squared_error(y_test, lstm_pred)):.3f}, MAE: {mean_absolute_error(y_test, lstm_pred):.3f}, R2: {r2_score(y_test, lstm_pred):.3f}")
+
+    # Kết hợp stacking với 4 mô hình
+    meta_X = np.column_stack((rf_pred, xgb_pred, lstm_pred, lgbm_pred))
+    meta_X_train, meta_X_test, meta_y_train, meta_y_test = train_test_split(
+        meta_X, y_test, test_size=TEST_SIZE, random_state=RANDOM_STATE
+    )
+    meta_model = LinearRegression()
+    meta_model.fit(meta_X_train, meta_y_train)
+    final_pred = meta_model.predict(meta_X_test)
+    rmse = np.sqrt(mean_squared_error(meta_y_test, final_pred)) if len(meta_y_test) >= 2 else None
+    mae = mean_absolute_error(meta_y_test, final_pred) if len(meta_y_test) >= 2 else None
+    r2 = r2_score(meta_y_test, final_pred) if len(meta_y_test) >= 2 else None
+    print(f"Stacking RMSE: {rmse:.3f}, MAE: {mae:.3f}, R2: {r2:.3f}")
+    return rf_model, xgb_model, meta_model, rmse, mae, r2, lstm_model, lgbm_model
+
+def predict_future_stacking(rf_model, xgb_model, meta_model, current_value, feature_name='Temp', past_window=3, days=5, lstm_model=None, lgbm_model=None):
     """
-    Predict future daily temperature values and weather description
-    
-    Args:
-        model: Trained regression model
-        current_value: Current temperature value
-        feature_name: Name of the feature (default: 'Temp')
-        past_window: Number of past values to consider
-        days: Number of days to forecast (default: 5)
-    
-    Returns:
-        dict: Dictionary with min_temps, max_temps, and descriptions for each day
+    Dự báo tương lai sử dụng stacking, có thêm LSTM và LightGBM.
     """
-    # Validate inputs
-    if model is None:
-        # Create a simple trend-based forecast without a model
-        base_temp = float(current_value) if current_value is not None else 20.0
-        daily_fluctuation = 5.0  # Default daily temperature range
-        return {
-            'min_temps': [round(base_temp - daily_fluctuation/2 + i*0.2, 1) for i in range(days)],
-            'max_temps': [round(base_temp + daily_fluctuation/2 + i*0.2, 1) for i in range(days)],
-            'descriptions': ["Clear sky", "Partly cloudy", "Cloudy", "Light rain", "Clear sky"][:days]
-        }
-    
-    # Validate current_value
-    try:
-        current_value = float(current_value)
-    except (ValueError, TypeError):
-        current_value = 20.0  # Default temperature in Celsius
-    
-    # Initialize values
+    import numpy as np
     min_temps = []
     max_temps = []
     descriptions = []
-    
-    # Weather descriptions based on temperature and typical patterns
     weather_conditions = {
         "hot": ["Clear sky", "Sunny", "Partly cloudy", "Hot"],
         "warm": ["Clear sky", "Partly cloudy", "Cloudy", "Light rain"],
@@ -546,106 +548,55 @@ def predict_future(model, current_value, feature_name='Temp', past_window=3, day
         "cool": ["Cloudy", "Light rain", "Rain", "Cool"],
         "cold": ["Light snow", "Snow", "Freezing", "Cold"]
     }
-    
-    # Use current value as the starting point
-    recent_values = [current_value] * past_window
-    daily_fluctuation = 5.0  # Typical temperature difference between day and night
-    
-    # Check if model feature names match our expected input
-    has_feature_mismatch = False
-    if hasattr(model, 'feature_names_in_'):
-        expected_features = [f"{feature_name}_lag_{i}" for i in range(1, past_window+1)]
-        if not all(feature in model.feature_names_in_ for feature in expected_features):
-            has_feature_mismatch = True
-    
-    # Generate predictions for each day
+    recent_values = [float(current_value)] * past_window
+    daily_fluctuation = 5.0
     for day in range(days):
-        try:
-            # Create DataFrame with appropriate column names
-            column_names = [f"{feature_name}_lag_{i}" for i in range(1, past_window+1)]
-            input_data = pd.DataFrame({name: [val] for name, val in zip(column_names, recent_values)})
-            
-            # Make predictions
-            if has_feature_mismatch:
-                # If feature names don't match, use a trend-based approach
-                base_trend = 0.1 * (day - days/2)  # Small trend up or down
-                base_temp = current_value + base_trend
-            else:
-                # Use the model for prediction
-                try:
-                    # Ensure column names match model expectations
-                    if hasattr(model, 'feature_names_in_'):
-                        input_data.columns = model.feature_names_in_
-                    
-                    # Make prediction
-                    base_temp = model.predict(input_data)[0]
-                except:
-                    # If prediction fails, fall back to a simple trend
-                    base_temp = current_value + 0.1 * (day - days/2)
-            
-            # Apply reasonable limits to the predicted temperature
-            base_temp = max(-40, min(base_temp, 50))
-            
-            # Add seasonal pattern (variation) to the prediction
-            seasonal_variation = 0.5 * np.sin(day/5)
-            base_temp += seasonal_variation
-            
-            # Calculate min and max temperatures for the day with random variation
-            random_variation = np.random.normal(0, 0.7)  # Random variation for realism
-            min_temp = base_temp - (daily_fluctuation / 2) + random_variation
-            max_temp = base_temp + (daily_fluctuation / 2) + random_variation
-            
-            # Ensure min is always less than max
-            if min_temp >= max_temp:
-                mid_temp = (min_temp + max_temp) / 2
-                min_temp = mid_temp - 2
-                max_temp = mid_temp + 2
-            
-            # Determine weather description based on temperature and patterns
-            if max_temp > 30:
-                category = "hot"
-            elif max_temp > 25:
-                category = "warm"
-            elif max_temp > 15:
-                category = "mild"
-            elif max_temp > 5:
-                category = "cool"
-            else:
-                category = "cold"
-            
-            # Choose a description from the appropriate category with some randomness
-            descriptions_for_category = weather_conditions[category]
-            description_index = (day + np.random.randint(0, 2)) % len(descriptions_for_category)
-            description = descriptions_for_category[description_index]
-            
-            # Add values to result lists
-            min_temps.append(round(min_temp, 1))
-            max_temps.append(round(max_temp, 1))
-            descriptions.append(description)
-            
-            # Update recent values for next prediction
-            recent_values = [base_temp] + recent_values[:-1]
-            
-        except Exception:
-            # Use fallback prediction if anything fails
-            if min_temps:
-                # Use last prediction with a small variation
-                last_min = min_temps[-1]
-                last_max = max_temps[-1]
-                last_desc = descriptions[-1]
-                
-                min_temps.append(round(last_min + np.random.normal(0, 0.5), 1))
-                max_temps.append(round(last_max + np.random.normal(0, 0.5), 1))
-                descriptions.append(last_desc)
-            else:
-                # If no previous predictions, use default values
-                min_temps.append(round(current_value - 2, 1))
-                max_temps.append(round(current_value + 2, 1))
-                descriptions.append("Clear sky")
-            
-            # Update recent values
-            recent_values = [current_value] + recent_values[:-1]
-    
+        input_arr = np.array(recent_values).reshape((1, past_window))
+        input_df = pd.DataFrame({f"{feature_name}_lag_{i+1}": [recent_values[i]] for i in range(past_window)})
+        rf_pred = rf_model.predict(input_df)[0] if rf_model is not None else 0
+        xgb_pred = xgb_model.predict(input_df)[0] if xgb_model is not None else 0
+        lgbm_pred = lgbm_model.predict(input_df)[0] if lgbm_model is not None else 0
+        if lstm_model is not None:
+            input_lstm = input_arr.reshape((1, past_window, 1))
+            lstm_pred = lstm_model.predict(input_lstm, verbose=0)[0][0]
+        else:
+            lstm_pred = 0
+        # Kết hợp stacking nếu meta_model có, nếu không thì trung bình các mô hình
+        preds = [p for p in [rf_pred, xgb_pred, lstm_pred, lgbm_pred] if p != 0]
+        if meta_model is not None and len(preds) > 0:
+            meta_input = np.array([[rf_pred, xgb_pred, lstm_pred, lgbm_pred]])
+            base_temp = meta_model.predict(meta_input)[0]
+        elif len(preds) > 0:
+            base_temp = np.mean(preds)
+        else:
+            base_temp = float(current_value)
+        base_temp = max(-40, min(base_temp, 50))
+        seasonal_variation = 0.5 * np.sin(day/5)
+        base_temp += seasonal_variation
+        random_variation = np.random.normal(0, 0.7)
+        min_temp = base_temp - (daily_fluctuation / 2) + random_variation
+        max_temp = base_temp + (daily_fluctuation / 2) + random_variation
+        if min_temp >= max_temp:
+            mid_temp = (min_temp + max_temp) / 2
+            min_temp = mid_temp - 2
+            max_temp = mid_temp + 2
+        if max_temp > 30:
+            category = "hot"
+        elif max_temp > 25:
+            category = "warm"
+        elif max_temp > 15:
+            category = "mild"
+        elif max_temp > 5:
+            category = "cool"
+        else:
+            category = "cold"
+        descriptions_for_category = weather_conditions[category]
+        description_index = (day + np.random.randint(0, 2)) % len(descriptions_for_category)
+        description = descriptions_for_category[description_index]
+        min_temps.append(round(min_temp, 1))
+        max_temps.append(round(max_temp, 1))
+        descriptions.append(description)
+        recent_values = [base_temp] + recent_values[:-1]
     return {
         'min_temps': min_temps,
         'max_temps': max_temps,
@@ -668,4 +619,4 @@ def map_wind_direction(wind_deg, le):
         return le.transform([compass_dir])[0]
     except ValueError:
         # If direction not in encoder, return most common
-        return le.transform([le.classes_[0]])[0] 
+        return le.transform([le.classes_[0]])[0]
