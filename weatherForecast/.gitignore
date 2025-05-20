@@ -22,6 +22,7 @@ secrets.py
 logs/
 *.log
 .cache
+__pycache__/
 
 # File hệ thống
 .DS_Store
@@ -31,4 +32,4 @@ Thumbs.db
 venv/
 .env/
 ENV/
-../myenv
+../myenv/
