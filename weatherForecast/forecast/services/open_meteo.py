@@ -152,14 +152,11 @@ def convert_open_meteo_to_standard_format(data, city_name=None, country_code=Non
                 "timestamp": int(datetime.datetime.strptime(f"{date} 12:00:00", "%Y-%m-%d %H:%M:%S").timestamp()),
                 "temp": temp,
                 "temp_min": temp_min,
-                "temp_max": temp_max,
-                "humidity": None,  # Open-Meteo doesn't provide humidity in basic dataset
-                "pressure": None,  # Open-Meteo doesn't provide pressure in basic dataset
+                "temp_max": temp_max, # Open-Meteo doesn't provide pressure in basic dataset
                 "wind_speed": wind_speed,
                 "wind_deg": wind_deg,
-                "clouds": None,
-                "weather_main": "Rain" if has_rain else "Clear",
-                "weather_description": "Precipitation" if has_rain else "Clear sky",
+                # "weather_main": "Rain" if has_rain else "Clear",
+                # "weather_description": "Precipitation" if has_rain else "Clear sky",
                 "precipitation": precipitation or 0,  # Default to 0 if None
                 "snow": daily.get("snowfall_sum", [])[i] if i < len(daily.get("snowfall_sum", [])) else None,
             }

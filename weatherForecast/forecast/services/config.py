@@ -19,16 +19,22 @@ DEFAULT_CITY = 'Ha noi'
 # File paths
 HISTORICAL_DATA_PATH = DATA_DIRECTORY
 
-# Model parameters
-RANDOM_FOREST_PARAMS = {
-    'n_estimators': 100,
-    'random_state': 42
-}
+# Feature engineering parameters
+WINDOW_SIZES = [3, 7, 14]  # For creating lag features
+FEATURE_SELECTION_K = 10  # Number of features to select
+OUTLIER_Z_THRESHOLD = 3  # Z-score threshold for outlier detection
 
 # Testing parameters
 TEST_SIZE = 0.2
 RANDOM_STATE = 42
+N_SPLITS = 5
 
 # Time configuration
 DEFAULT_TIMEZONE = 'Asia/Ho_Chi_Minh'
-FORECAST_DAYS = 5 
+FORECAST_DAYS = 5
+
+# Model weights for hybrid model
+HYBRID_MODEL_WEIGHTS = {
+    'ml_model': 0.6,
+    'deep_model': 0.4
+} 

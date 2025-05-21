@@ -75,8 +75,8 @@ def fetch_all_capitals_historical_data(days_back=30, source=SOURCE_NOAA):
     """
     # Apply appropriate day limit based on the source
     if source.lower() == SOURCE_OPEN_METEO:
-        # Open-Meteo supports up to 10 years of historical data
-        max_days = 3650
+        # Open-Meteo supports up to 20 years of historical data
+        max_days = 7300
     else:
         # NOAA API limit of 1 year
         max_days = 364
@@ -143,8 +143,8 @@ def fetch_capital_historical_data(country_code, days_back=30, start_date=None, e
     
     # Set different max_days based on the data source
     if source.lower() == SOURCE_OPEN_METEO:
-        # Open-Meteo supports up to 10 years of historical data
-        max_days = 3650
+        # Open-Meteo supports up to 20 years of historical data
+        max_days = 7300
     else:
         # NOAA API has a limit of 1 year
         max_days = 364
@@ -244,8 +244,8 @@ def fetch_maximum_historical_data(source=SOURCE_NOAA):
     """
     # Set the appropriate maximum days based on the data source
     if source.lower() == SOURCE_OPEN_METEO:
-        # Open-Meteo supports up to 10 years (3650 days) of historical data
-        max_days = 3650
+        # Open-Meteo supports up to 20 years (7300 days) of historical data
+        max_days = 7300
     else:
         # NOAA API có giới hạn khoảng thời gian phải nhỏ hơn 1 năm (364 days)
         max_days = 364

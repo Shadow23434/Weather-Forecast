@@ -2,9 +2,8 @@
 # Import key functions to simplify imports in other modules
 from .weather_api import get_current_weather, get_city_from_ip, get_weather_icon, normalize_city_name
 from .ml_predictions import (
-    read_historical_data, prepare_data, train_rain_model, 
-    prepare_regression_data, train_regression_model, enrich_historical_data,
-    predict_future_stacking, map_wind_direction, find_city_historical_data
+    find_city_historical_data,
+    forecast_temperature_from_csv,
 )
 from .utils import format_future_times, calculate_temp_percentage
 from .capitals import get_capital_city, get_all_capital_cities, get_all_countries_and_capitals, get_capital_coordinates, get_all_capitals_with_coordinates

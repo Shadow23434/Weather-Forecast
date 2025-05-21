@@ -1,26 +1,63 @@
 from django.shortcuts import render
-from django.http import HttpResponse, JsonResponse
+from django.http import JsonResponse
 from datetime import datetime
 import os
 import pandas as pd
-import json
 from datetime import datetime, timedelta
-from django.conf import settings
-
-# Import form
 from .forms import WeatherForm
+import joblib
+from django.core.cache import cache
+import json
 
-# Import services
 from .services import (
     get_current_weather, get_city_from_ip, get_weather_icon, normalize_city_name,
-    read_historical_data, prepare_regression_data, train_regression_model,
-    format_future_times, calculate_temp_percentage,
-    enrich_historical_data, predict_future_stacking,
+    forecast_temperature_from_csv, find_city_historical_data,
     get_capital_city, get_all_countries_and_capitals, fetch_capital_historical_data,
-    fetch_all_capitals_historical_data, find_city_historical_data,
-    get_all_capitals_with_coordinates, SOURCE_NOAA, SOURCE_OPEN_METEO
-)
+    fetch_all_capitals_historical_data
+) 
 from .services.config import DEFAULT_CITY, HISTORICAL_DATA_PATH, FORECAST_DAYS, FLAG_URL
+
+# Add model storage paths
+MODEL_STORAGE_PATH = os.path.join(HISTORICAL_DATA_PATH, 'models')
+os.makedirs(MODEL_STORAGE_PATH, exist_ok=True)
+
+def get_model_path(city, target_type):
+    """Get path for stored model"""
+    city_dir = os.path.join(MODEL_STORAGE_PATH, normalize_city_name(city))
+    os.makedirs(city_dir, exist_ok=True)
+    return os.path.join(city_dir, f'{target_type}_model.joblib')
+
+def load_cached_model(city, target_type):
+    """Load model from cache or storage"""
+    cache_key = f'weather_model_{city}_{target_type}'
+    
+    # Try to get from cache first
+    cached_model = cache.get(cache_key)
+    if cached_model:
+        return cached_model
+    
+    # If not in cache, try to load from storage
+    model_path = get_model_path(city, target_type)
+    if os.path.exists(model_path):
+        try:
+            model_data = joblib.load(model_path)
+            # Cache for 6 hours
+            cache.set(cache_key, model_data, 6 * 60 * 60)
+            return model_data
+        except Exception as e:
+            print(f"Error loading model from storage: {str(e)}")
+    
+    return None
+
+def save_model_to_storage(city, target_type, model_data):
+    """Save model to storage and cache"""
+    model_path = get_model_path(city, target_type)
+    try:
+        joblib.dump(model_data, model_path)
+        cache_key = f'weather_model_{city}_{target_type}'
+        cache.set(cache_key, model_data, 6 * 60 * 60)
+    except Exception as e:
+        print(f"Error saving model to storage: {str(e)}")
 
 def weather_view(request):
     if request.method == 'POST':
@@ -56,87 +93,61 @@ def weather_view(request):
 
     icon_type = get_weather_icon(current_weather['description'])
 
-    try:
-        country_code = current_weather.get('country_code')
-        historical_data_file = find_city_historical_data(
-            HISTORICAL_DATA_PATH, city=city, country_code=country_code, default_file="weather.csv"
-        )
-        print("historical_data_file: ", historical_data_file)
-        historical_data = read_historical_data(historical_data_file)
-        
-        if historical_data.empty:
-            if historical_data_file != os.path.join(HISTORICAL_DATA_PATH, "weather.csv"):
-                default_file_path = os.path.join(HISTORICAL_DATA_PATH, "weather.csv")
-                if os.path.exists(default_file_path):
-                    historical_data = read_historical_data(default_file_path)
-        else:
-            if 'city' not in historical_data.columns:
-                historical_data['city'] = city
-    except Exception:
-        historical_data = pd.DataFrame()
-
-    enhanced_data = enrich_historical_data(historical_data, city)
-    X_temp, y_temp = prepare_regression_data(enhanced_data)
+    country_code = current_weather.get('country_code')
+    historical_data_file = find_city_historical_data(
+        HISTORICAL_DATA_PATH, city=city, country_code=country_code, default_file="weather.csv"
+    )
+    print("historical_data_file: ", historical_data_file)
     
-    try:
-        rf_model, xgb_model, meta_model, rmse, mae, r2, lstm_model, lgbm_model = train_regression_model(X_temp, y_temp)
-    except Exception as e:
-        print("[ERROR] train_regression_model:", e)
-        rf_model = xgb_model = meta_model = lstm_model = lgbm_model = None
-        rmse = mae = r2 = None
+    # Get current temperature
+    current_temp = current_weather['current_temp']
 
-    print("rmse: ", rmse, "mae: ", mae, "r2: ", r2)
+    # Try to load cached models first
+    min_model_data = load_cached_model(city, 'temp_min')
+    max_model_data = load_cached_model(city, 'temp_max')
 
-    try:
-        forecast = predict_future_stacking(
-            rf_model, xgb_model, meta_model, current_weather['current_temp'],
-            feature_name='Temp', past_window=3, days=FORECAST_DAYS, lstm_model=lstm_model, lgbm_model=lgbm_model
+    if min_model_data and max_model_data:
+        min_model, min_scaler, min_features, min_forecast = min_model_data
+        max_model, max_scaler, max_features, max_forecast = max_model_data
+    else:
+        # If no cached models, train new ones
+        min_model, min_scaler, min_features, min_forecast = forecast_temperature_from_csv(
+            historical_data_file, target='temp_min', city=city
         )
-    except Exception as e:
-        print("[ERROR] predict_future_stacking:", e)
-        forecast = {'min_temps': [None]*FORECAST_DAYS, 'max_temps': [None]*FORECAST_DAYS, 'descriptions': [None]*FORECAST_DAYS}
+        max_model, max_scaler, max_features, max_forecast = forecast_temperature_from_csv(
+            historical_data_file, target='temp_max', city=city
+        )
 
-    # LightGBM pipeline forecast
-    min_required_rows = 10
-    try:
-        if enhanced_data is not None and len(enhanced_data.dropna()) >= min_required_rows:
-            lgbm_forecast = forecast_with_lightgbm(enhanced_data, days=FORECAST_DAYS)
-        else:
-            print("[LightGBM] Skipped: Not enough valid data for LightGBM training.")
-            lgbm_forecast = {
-                'min_temps': [None]*FORECAST_DAYS,
-                'max_temps': [None]*FORECAST_DAYS,
-                'descriptions': [None]*FORECAST_DAYS,
-                'min_rmse': None,
-                'max_rmse': None,
-                'desc_acc': None
-            }
-    except Exception as e:
-        print("[ERROR] forecast_with_lightgbm:", e)
-        lgbm_forecast = {
-            'min_temps': [None]*FORECAST_DAYS,
-            'max_temps': [None]*FORECAST_DAYS,
-            'descriptions': [None]*FORECAST_DAYS,
-            'min_rmse': None,
-            'max_rmse': None,
-            'desc_acc': None
-        }
+        # Save models if training was successful
+        if min_model is not None and max_model is not None:
+            save_model_to_storage(city, 'temp_min', (min_model, min_scaler, min_features, min_forecast))
+            save_model_to_storage(city, 'temp_max', (max_model, max_scaler, max_features, max_forecast))
 
-    forecast_dates = format_future_times(days=FORECAST_DAYS)
+    # Format forecast dates
+    forecast_dates = [datetime.now() + timedelta(days=i+1) for i in range(FORECAST_DAYS)]
+    forecast_dates = [date.strftime("%B %d, %Y") for date in forecast_dates]
+    
+    # Create forecast days list
     forecast_days = []
     for i in range(FORECAST_DAYS):
         day_forecast = {
             'date': forecast_dates[i],
-            'min_temp': forecast['min_temps'][i] if forecast['min_temps'] else None,
-            'max_temp': forecast['max_temps'][i] if forecast['max_temps'] else None,
-            'description': forecast['descriptions'][i] if forecast['descriptions'] else None,
-            'icon': get_weather_icon(forecast['descriptions'][i]) if forecast['descriptions'] else None
+            'min_temp': min_forecast[i] if min_forecast else current_temp - 2,
+            'max_temp': max_forecast[i] if max_forecast else current_temp + 2,
+            'description': generate_weather_description(max_forecast[i] if max_forecast else current_temp + 2),
+            'icon': get_weather_icon(generate_weather_description(max_forecast[i] if max_forecast else current_temp + 2))
         }
         forecast_days.append(day_forecast)
 
-    temp_percentage = calculate_temp_percentage(
-        current_weather['temp_min'], current_weather['temp_max'], current_weather['current_temp']
-    )
+    # Calculate temperature percentage safely
+    try:
+        temp_diff = current_weather['temp_max'] - current_weather['temp_min']
+        if temp_diff != 0:
+            temp_percentage = ((current_weather['current_temp'] - current_weather['temp_min']) / temp_diff) * 100
+        else:
+            temp_percentage = 50  # Default to middle if min and max are the same
+    except (KeyError, TypeError, ZeroDivisionError):
+        temp_percentage = 50  # Default value if calculation fails
 
     context = {
         'cod': cod,
@@ -161,15 +172,33 @@ def weather_view(request):
         'temp_percentage': temp_percentage,
         'FLAG_URL': FLAG_URL,
         'form': form,
-        'rmse': rmse,
-        'mae': mae,
-        'r2': r2,
-        'lgbm_min_rmse': lgbm_forecast.get('min_rmse'),
-        'lgbm_max_rmse': lgbm_forecast.get('max_rmse'),
-        'lgbm_desc_acc': lgbm_forecast.get('desc_acc')
     }
 
     return render(request, 'weather.html', context)
+
+def generate_weather_description(max_temp):
+    """
+    Generate weather description based on maximum temperature.
+    """
+    # Handle None or invalid values
+    if max_temp is None:
+        return "Partly cloudy"  # Default description
+    
+    try:
+        max_temp = float(max_temp)
+    except (ValueError, TypeError):
+        return "Partly cloudy"  # Default description for invalid values
+        
+    if max_temp > 33:
+        return "Hot"
+    elif max_temp > 28:
+        return "Clear sky"
+    elif max_temp > 24:
+        return "Partly cloudy"
+    elif max_temp > 20:
+        return "Light rain"
+    else:
+        return "Rain"
 
 # New view for historical capital city data
 def capital_historical(request):
@@ -179,7 +208,7 @@ def capital_historical(request):
     
     try:
         # Set appropriate max days based on source
-        max_days = 3650 if source.lower() == 'open_meteo' else 364
+        max_days = 7300 if source.lower() == 'open_meteo' else 364
         # Get requested days, capped at max_days
         days = min(int(request.GET.get('days', 30)), max_days)
         
@@ -293,3 +322,20 @@ def manual_historical_data(request):
     }
     
     return render(request, 'forecast/manual_historical.html', context)
+
+
+    try:
+        if len(df) < window + 1:
+            return None, None
+        df = prepare_lagged_features(df, col, window)
+        df = df.dropna(subset=[col] + [f'{col}_lag_{i}' for i in range(1, window+1)])
+        if len(df) < 2:
+            return None, None
+        X = df[[f'{col}_lag_{i}' for i in range(1, window+1)]]
+        y = df[col]
+        model = RandomForestRegressor(n_estimators=100, random_state=42)
+        model.fit(X, y)
+        return model, list(X.iloc[-1])
+    except Exception as e:
+        print(f"Error training model for {col}: {str(e)}")
+        return None, None

@@ -119,10 +119,10 @@
                             </div>
                             <div class="mb-3">
                                 <label for="days" class="form-label">Days of Historical Data</label>
-                                <input type="number" class="form-control" id="days" name="days" value="3650" min="1"
-                                    max="3650">
+                                <input type="number" class="form-control" id="days" name="days" value="7300" min="1"
+                                    max="7300">
                                 <div class="form-text">Number of days back to fetch. NOAA API is limited to 365 days,
-                                    Open-Meteo supports up to 10 years (3650 days)</div>
+                                    Open-Meteo supports up to 20 years (7300 days)</div>
                             </div>
                             <div class="mb-3">
                                 <label for="source" class="form-label">Data Source</label>
@@ -207,11 +207,11 @@
                 daysInput.nextElementSibling.innerHTML =
                     'Number of days back to fetch. NOAA API is limited to 365 days.';
             } else {
-                // Open-Meteo supports up to 10 years
-                daysInput.max = 3650;
-                daysInput.value = daysInput.value || 3650; // Set to 3650 if empty
+                // Open-Meteo supports up to 20 years
+                daysInput.max = 7300;
+                daysInput.value = daysInput.value || 7300; // Set to 7300 if empty
                 daysInput.nextElementSibling.innerHTML =
-                    'Number of days back to fetch. Open-Meteo supports up to 10 years (3650 days).';
+                    'Number of days back to fetch. Open-Meteo supports up to 20 years (7300 days).';
             }
         }
 

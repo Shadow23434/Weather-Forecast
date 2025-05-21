@@ -363,6 +363,16 @@
     <script type="module" src="{% static 'js/searchInput.js' %}?v=1.0.0"></script>
     <script type="module" src="{% static 'js/tempSlider.js' %}?v=1.0.0"></script>
     <script src="{% static 'js/weatherIcons.js' %}?v=1.0.0"></script>
+    <script src="{% static 'js/loadingOverlay.js' %}?v=1.0.0"></script>
+
+    <!-- Loading Overlay -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-spinner"></div>
+        <div class="loading-text">Training weather prediction model...</div>
+        <div class="loading-progress">
+            <div class="loading-progress-bar"></div>
+        </div>
+    </div>
 </body>
 
 </html>
