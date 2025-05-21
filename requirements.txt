@@ -1,0 +1,9 @@
+Django>=5.2
+requests
+pandas
+numpy
+scikit-learn
+xgboost
+lightgbm
+tensorflow
+python-environ

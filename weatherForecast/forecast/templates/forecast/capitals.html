@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Capital Cities Weather Data</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .country-card {
+            margin-bottom: 20px;
+            transition: transform 0.2s;
+        }
+
+        .country-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
+        }
+
+        .flag-img {
+            width: 30px;
+            margin-right: 10px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container mt-5">
+        <h1 class="mb-4">Historical Weather Data for Capital Cities</h1>
+        <p class="lead">Select a country to view historical weather data for its capital city.</p>
+
+        <div class="row mb-4">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">API Usage</h5>
+                        <p class="card-text">You can access historical weather data via our API:</p>
+                        <code>GET /api/capital/historical/?country=US&days=30</code>
+                        <p class="mt-3">Parameters:</p>
+                        <ul>
+                            <li><strong>country</strong>: Country code (e.g., US, GB, FR)</li>
+                            <li><strong>days</strong>: Number of days back to fetch (default: 30)</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">Available Countries</h5>
+                        <p class="card-text">We have data for {{ count }} capital cities around the world.</p>
+                        <a href="/" class="btn btn-primary">Back to Home</a>
+                        <a href="#countries-list" class="btn btn-outline-primary">View Countries</a>
+                        <a href="/capitals/fetch/" class="btn btn-success">Manual Data Fetch</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <h2 id="countries-list" class="mb-4">Countries and Capital Cities</h2>
+        <div class="row">
+            {% for country_code, capital in countries_and_capitals %}
+            <div class="col-md-4">
+                <div class="card country-card">
+                    <div class="card-body">
+                        <h5 class="card-title">
+                            <img src="https://flagcdn.com/w20/{{ country_code|lower }}.png" alt="{{ country_code }}"
+                                class="flag-img">
+                            {{ country_code }}
+                        </h5>
+                        <p class="card-text">Capital: <strong>{{ capital }}</strong></p>
+                        <a href="/api/capital/historical/?country={{ country_code }}" class="btn btn-sm btn-primary"
+                            target="_blank">
+                            View Historical Data
+                        </a>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <footer class="bg-light py-4 mt-5">
+        <div class="container text-center">
+            <p>&copy; {% now "Y" %} Weather Forecast App. All rights reserved.</p>
+        </div>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+
+</html>
