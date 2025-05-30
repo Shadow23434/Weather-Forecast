@@ -1,3 +1,5 @@
+import { showLoadingOverlay } from './loadingOverlay.js';
+
 document.addEventListener('DOMContentLoaded', function () {
     const cityInput = document.getElementById('cityInput');
     const searchBtn = document.getElementById('searchBtn');
@@ -29,9 +31,7 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 
     // Handle form submission
-    searchForm.addEventListener('submit', function (e) {
-        if (cityInput.value.trim() === '') {
-            e.preventDefault();
-        }
+    searchForm.addEventListener('submit', function () {
+        showLoadingOverlay();
     });
 }); 

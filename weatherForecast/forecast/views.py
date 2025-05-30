@@ -11,10 +11,10 @@ import json
 
 from .services import (
     get_current_weather, get_city_from_ip, get_weather_icon, normalize_city_name,
-    forecast_temperature_from_csv, find_city_historical_data,
-    get_capital_city, get_all_countries_and_capitals, fetch_capital_historical_data,
-    fetch_all_capitals_historical_data
-) 
+    find_city_historical_data, get_capital_city, get_all_countries_and_capitals,
+    fetch_capital_historical_data, fetch_all_capitals_historical_data
+)
+from .services.lstm_predictions import forecast_temperature_lstm
 from .services.config import DEFAULT_CITY, HISTORICAL_DATA_PATH, FORECAST_DAYS, FLAG_URL
 
 # Add model storage paths
@@ -102,40 +102,57 @@ def weather_view(request):
     # Get current temperature
     current_temp = current_weather['current_temp']
 
-    # Try to load cached models first
-    min_model_data = load_cached_model(city, 'temp_min')
-    max_model_data = load_cached_model(city, 'temp_max')
+    # Get forecasts using LSTM model
+    min_forecast = forecast_temperature_lstm(
+        historical_data_file,
+        city=city,
+        target_type='temp_min',
+        forecast_days=FORECAST_DAYS
+    )
+    
+    max_forecast = forecast_temperature_lstm(
+        historical_data_file,
+        city=city,
+        target_type='temp_max',
+        forecast_days=FORECAST_DAYS
+    )
 
-    if min_model_data and max_model_data:
-        min_model, min_scaler, min_features, min_forecast = min_model_data
-        max_model, max_scaler, max_features, max_forecast = max_model_data
-    else:
-        # If no cached models, train new ones
-        min_model, min_scaler, min_features, min_forecast = forecast_temperature_from_csv(
-            historical_data_file, target='temp_min', city=city
-        )
-        max_model, max_scaler, max_features, max_forecast = forecast_temperature_from_csv(
-            historical_data_file, target='temp_max', city=city
-        )
+    # Load model metrics if available
+    model_metrics = {}
+    for target_type in ['temp_min', 'temp_max']:
+        metrics_path = os.path.join(MODEL_STORAGE_PATH, f"{city}_{target_type}_metrics.json")
+        if os.path.exists(metrics_path):
+            try:
+                with open(metrics_path, 'r') as f:
+                    model_metrics[target_type] = json.load(f)
+            except Exception as e:
+                print(f"Error loading metrics for {city} {target_type}: {str(e)}")
 
-        # Save models if training was successful
-        if min_model is not None and max_model is not None:
-            save_model_to_storage(city, 'temp_min', (min_model, min_scaler, min_features, min_forecast))
-            save_model_to_storage(city, 'temp_max', (max_model, max_scaler, max_features, max_forecast))
+    print()
+    print(model_metrics)
+    print()
 
     # Format forecast dates
     forecast_dates = [datetime.now() + timedelta(days=i+1) for i in range(FORECAST_DAYS)]
     forecast_dates = [date.strftime("%B %d, %Y") for date in forecast_dates]
     
-    # Create forecast days list
+    # Create forecast days list with rounded temperatures
     forecast_days = []
     for i in range(FORECAST_DAYS):
+        # Use current temperature as fallback if forecasts are None
+        min_temp = round(min_forecast[i], 1) if min_forecast is not None else round(current_temp - 2, 1)
+        max_temp = round(max_forecast[i], 1) if max_forecast is not None else round(current_temp + 2, 1)
+        
+        # Ensure min_temp is not greater than max_temp
+        if min_temp > max_temp:
+            min_temp, max_temp = max_temp, min_temp
+        
         day_forecast = {
             'date': forecast_dates[i],
-            'min_temp': min_forecast[i] if min_forecast else current_temp - 2,
-            'max_temp': max_forecast[i] if max_forecast else current_temp + 2,
-            'description': generate_weather_description(max_forecast[i] if max_forecast else current_temp + 2),
-            'icon': get_weather_icon(generate_weather_description(max_forecast[i] if max_forecast else current_temp + 2))
+            'min_temp': min_temp,
+            'max_temp': max_temp,
+            'description': generate_weather_description(max_temp),
+            'icon': get_weather_icon(generate_weather_description(max_temp))
         }
         forecast_days.append(day_forecast)
 
@@ -152,10 +169,10 @@ def weather_view(request):
     context = {
         'cod': cod,
         'location': city,
-        'current_temp': current_weather['current_temp'],
-        'MinTemp': current_weather['temp_min'],
-        'MaxTemp': current_weather['temp_max'],
-        'feels_like': current_weather['feels_like'],
+        'current_temp': round(current_weather['current_temp'], 1),
+        'MinTemp': round(current_weather['temp_min'], 1),
+        'MaxTemp': round(current_weather['temp_max'], 1),
+        'feels_like': round(current_weather['feels_like'], 1),
         'humidity': current_weather['humidity'],
         'clouds': current_weather['clouds'],
         'description': current_weather['description'],
@@ -165,13 +182,14 @@ def weather_view(request):
         'country_code': current_weather['country_code'],
         'time': datetime.now(),
         'date': datetime.now().strftime("%B %d, %Y"),
-        'wind': current_weather['wind_gust_speed'],
+        'wind': round(current_weather['wind_gust_speed'], 1),
         'pressure': current_weather['pressure'],
         'visibility': current_weather['visibility'],
         'forecast_days': forecast_days,
         'temp_percentage': temp_percentage,
         'FLAG_URL': FLAG_URL,
         'form': form,
+        'model_metrics': model_metrics,  # Add model metrics to context
     }
 
     return render(request, 'weather.html', context)
@@ -208,7 +226,7 @@ def capital_historical(request):
     
     try:
         # Set appropriate max days based on source
-        max_days = 7300 if source.lower() == 'open_meteo' else 364
+        max_days = 7300 if source.lower() == 'open_meteo' else 365
         # Get requested days, capped at max_days
         days = min(int(request.GET.get('days', 30)), max_days)
         
@@ -271,13 +289,13 @@ def manual_historical_data(request):
     
     if request.method == 'POST':
         country_code = request.POST.get('country_code')
-        # Get days value from POST, limited to maximum of 364 days for NOAA and 3650 for Open-Meteo
-        days = int(request.POST.get('days', 3650))
+        # Get days value from POST, limited to maximum of 364 days for NOAA and 7300 for Open-Meteo
+        days = int(request.POST.get('days', 7300))
         # Get data source (NOAA or Open-Meteo, default to Open-Meteo)
         source = request.POST.get('source', 'open_meteo')
         
         # Set max days based on source
-        max_days = 3650 if source.lower() == 'open_meteo' else 365
+        max_days = 7300 if source.lower() == 'open_meteo' else 365
         days = min(days, max_days)
         
         try:
@@ -322,20 +340,3 @@ def manual_historical_data(request):
     }
     
     return render(request, 'forecast/manual_historical.html', context)
-
-
-    try:
-        if len(df) < window + 1:
-            return None, None
-        df = prepare_lagged_features(df, col, window)
-        df = df.dropna(subset=[col] + [f'{col}_lag_{i}' for i in range(1, window+1)])
-        if len(df) < 2:
-            return None, None
-        X = df[[f'{col}_lag_{i}' for i in range(1, window+1)]]
-        y = df[col]
-        model = RandomForestRegressor(n_estimators=100, random_state=42)
-        model.fit(X, y)
-        return model, list(X.iloc[-1])
-    except Exception as e:
-        print(f"Error training model for {col}: {str(e)}")
-        return None, None

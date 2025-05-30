@@ -300,6 +300,74 @@ def create_ensemble_model():
     
     return ensemble
 
+def get_seasonal_temperature_bounds(df, target, date):
+    """
+    Get temperature bounds based on historical data for the same season
+    """
+    # Convert date to day of year
+    day_of_year = date.dayofyear
+    month = date.month
+    
+    # Define seasons with more precise boundaries based on month and day
+    if (month == 12 and date.day >= 21) or month <= 2 or (month == 3 and date.day < 20):
+        current_season = 'winter'
+    elif (month == 3 and date.day >= 20) or month <= 5 or (month == 6 and date.day < 21):
+        current_season = 'spring'
+    elif (month == 6 and date.day >= 21) or month <= 8 or (month == 9 and date.day < 22):
+        current_season = 'summer'
+    else:
+        current_season = 'fall'
+    
+    # Create season mask based on date
+    if current_season == 'winter':
+        season_mask = ((df['date'].dt.month == 12) & (df['date'].dt.day >= 21)) | \
+                      (df['date'].dt.month <= 2) | \
+                      ((df['date'].dt.month == 3) & (df['date'].dt.day < 20))
+    elif current_season == 'spring':
+        season_mask = ((df['date'].dt.month == 3) & (df['date'].dt.day >= 20)) | \
+                      (df['date'].dt.month >= 4) & (df['date'].dt.month <= 5) | \
+                      ((df['date'].dt.month == 6) & (df['date'].dt.day < 21))
+    elif current_season == 'summer':
+        season_mask = ((df['date'].dt.month == 6) & (df['date'].dt.day >= 21)) | \
+                      (df['date'].dt.month >= 7) & (df['date'].dt.month <= 8) | \
+                      ((df['date'].dt.month == 9) & (df['date'].dt.day < 22))
+    else:  # fall
+        season_mask = ((df['date'].dt.month == 9) & (df['date'].dt.day >= 22)) | \
+                      (df['date'].dt.month >= 10) & (df['date'].dt.month <= 11) | \
+                      ((df['date'].dt.month == 12) & (df['date'].dt.day < 21))
+    
+    # Get historical data for the same season
+    season_data = df[season_mask]
+    
+    if len(season_data) < 30:  # Not enough seasonal data
+        # Fallback to using all data
+        season_data = df
+    
+    if len(season_data) == 0:
+        return None, None
+    
+    # Calculate seasonal statistics
+    mean = season_data[target].mean()
+    std = season_data[target].std()
+    
+    # Set bounds based on seasonal statistics
+    std_factor = 2.5  # Standard deviation factor for bounds
+    lower_bound = mean - (std_factor * std)
+    upper_bound = mean + (std_factor * std)
+    
+    # Ensure bounds are within historical min/max with some flexibility
+    historical_min = season_data[target].min()
+    historical_max = season_data[target].max()
+    
+    # Allow slight extension beyond historical records for extreme events
+    extended_min = historical_min - (0.05 * abs(historical_min))
+    extended_max = historical_max + (0.05 * abs(historical_max))
+    
+    lower_bound = max(lower_bound, extended_min)
+    upper_bound = min(upper_bound, extended_max)
+    
+    return lower_bound, upper_bound
+
 def forecast_temperature_from_csv(
     csv_path, 
     target,
@@ -307,7 +375,7 @@ def forecast_temperature_from_csv(
     n_estimators=100, 
     random_state=42,
     forecast_days=5,
-    city=None  # Add city parameter
+    city=None
 ):
     # Try to load pre-trained model if city is provided
     if city:
@@ -361,43 +429,63 @@ def forecast_temperature_from_csv(
                 last_row['sin_day'] = np.sin(2 * np.pi * next_date.dayofyear/365)
                 last_row['cos_day'] = np.cos(2 * np.pi * next_date.dayofyear/365)
                 
+                # Get seasonal bounds for the forecast date
+                seasonal_lower, seasonal_upper = get_seasonal_temperature_bounds(df, target, next_date)
+                
                 # Prepare input features
                 input_features = []
                 for f in features:
                     input_features.append(last_row[f])
                 input_scaled = scaler.transform([input_features])
                 
-                # Get prediction
+                # Get prediction from ensemble
                 y_pred = model.predict(input_scaled)[0]
                 
-                # Add seasonal variation
+                # Add seasonal variation based on day of year
                 seasonal_factor = np.sin(2 * np.pi * next_date.dayofyear/365) * (temp_std * 0.5)
                 
-                # Add random variation
+                # Add random variation with increasing uncertainty for longer forecasts
+                noise_scale = 0.3 + i*0.1  # Base uncertainty increasing with forecast days
+                
                 if target == 'temp_min':
-                    noise = np.random.normal(-1.0, 0.5 + i*0.2)
+                    noise = np.random.normal(-1.0, noise_scale)
                 elif target == 'temp_max':
-                    noise = np.random.normal(1.0, 0.5 + i*0.2)
+                    noise = np.random.normal(1.0, noise_scale)
                 else:
-                    noise = np.random.normal(0, 0.3 + i*0.1)
+                    noise = np.random.normal(0, noise_scale)
                 
                 # Combine all factors
-                y_pred = y_pred + seasonal_factor + noise + base_trend[i]
+                y_pred = y_pred + noise + base_trend[i]
                 
-                # Ensure reasonable temperature range
-                if target == 'temp_min':
-                    y_pred = max(min(y_pred, temp_mean - 2), temp_min)
-                elif target == 'temp_max':
-                    y_pred = min(max(y_pred, temp_mean + 2), temp_max)
+                # Apply temperature constraints with seasonal consideration
+                if seasonal_lower is not None and seasonal_upper is not None:
+                    # Use seasonal bounds if available
+                    y_pred = max(min(y_pred, seasonal_upper), seasonal_lower)
                 else:
-                    y_pred = max(min(y_pred, temp_max), temp_min)
+                    # Fallback to historical bounds with seasonal adjustment
+                    if target == 'temp_min':
+                        y_pred = max(min(y_pred, temp_mean - 2), temp_min)
+                    elif target == 'temp_max':
+                        y_pred = min(max(y_pred, temp_mean + 2), temp_max)
+                    else:
+                        y_pred = max(min(y_pred, temp_max), temp_min)
+                
+                # Additional constraints based on target type
+                if target == 'temp_min':
+                    # Ensure min temp is not higher than max temp
+                    y_pred = min(y_pred, temp_max - 2)
+                elif target == 'temp_max':
+                    # Ensure max temp is not lower than min temp
+                    y_pred = max(y_pred, temp_min + 2)
                 
                 forecast_results.append(round(y_pred, 1))
+                
+                # Update last row for next iteration
                 last_row[target] = y_pred
             
             return model, scaler, features, forecast_results
     
-    # If no pre-trained model or city not provided, train new model
+#     If no pre-trained model or city not provided, train new model
     # Read data
     df = pd.read_csv(csv_path)
     df['date'] = pd.to_datetime(df['date'])
@@ -472,6 +560,9 @@ def forecast_temperature_from_csv(
         last_row['sin_day'] = np.sin(2 * np.pi * next_date.dayofyear/365)
         last_row['cos_day'] = np.cos(2 * np.pi * next_date.dayofyear/365)
         
+        # Get seasonal bounds for the forecast date
+        seasonal_lower, seasonal_upper = get_seasonal_temperature_bounds(df, target, next_date)
+        
         # Prepare input features
         input_features = []
         for f in features:
@@ -481,37 +572,46 @@ def forecast_temperature_from_csv(
         # Get prediction from ensemble
         y_pred = ensemble.predict(input_scaled)[0]
         
-        # Add seasonal variation
+        # Add seasonal variation based on day of year
         seasonal_factor = np.sin(2 * np.pi * next_date.dayofyear/365) * (temp_std * 0.5)
         
-        # Add random variation with increasing uncertainty
+        # Add random variation with increasing uncertainty for longer forecasts
+        noise_scale = 0.3 + i*0.1  # Base uncertainty increasing with forecast days
+        
         if target == 'temp_min':
-            noise = np.random.normal(-1.0, 0.5 + i*0.2)
+            noise = np.random.normal(-1.0, noise_scale)
         elif target == 'temp_max':
-            noise = np.random.normal(1.0, 0.5 + i*0.2)
+            noise = np.random.normal(1.0, noise_scale)
         else:
-            noise = np.random.normal(0, 0.3 + i*0.1)
+            noise = np.random.normal(0, noise_scale)
         
         # Combine all factors
-        y_pred = y_pred + seasonal_factor + noise + base_trend[i]
+        y_pred = y_pred + noise + base_trend[i]
         
-        # Ensure reasonable temperature range
-        if target == 'temp_min':
-            y_pred = max(min(y_pred, temp_mean - 2), temp_min)
-        elif target == 'temp_max':
-            y_pred = min(max(y_pred, temp_mean + 2), temp_max)
+        # Apply temperature constraints with seasonal consideration
+        if seasonal_lower is not None and seasonal_upper is not None:
+            # Use seasonal bounds if available
+            y_pred = max(min(y_pred, seasonal_upper), seasonal_lower)
         else:
-            y_pred = max(min(y_pred, temp_max), temp_min)
+            # Fallback to historical bounds with seasonal adjustment
+            if target == 'temp_min':
+                y_pred = max(min(y_pred, temp_mean - 2), temp_min)
+            elif target == 'temp_max':
+                y_pred = min(max(y_pred, temp_mean + 2), temp_max)
+            else:
+                y_pred = max(min(y_pred, temp_max), temp_min)
+        
+        # Additional constraints based on target type
+        if target == 'temp_min':
+            # Ensure min temp is not higher than max temp
+            y_pred = min(y_pred, temp_max - 2)
+        elif target == 'temp_max':
+            # Ensure max temp is not lower than min temp
+            y_pred = max(y_pred, temp_min + 2)
         
         forecast_results.append(round(y_pred, 1))
         
-        # Update time features
-        last_row['date'] = next_date
-        last_row['hour'] = next_date.hour
-        last_row['day_of_year'] = next_date.dayofyear
-        last_row['sin_day'] = np.sin(2 * np.pi * next_date.dayofyear/365)
-        last_row['cos_day'] = np.cos(2 * np.pi * next_date.dayofyear/365)
-        
+        # Update last row for next iteration
         last_row[target] = y_pred
     
     return ensemble, scaler, features, forecast_results

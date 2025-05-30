@@ -5,6 +5,9 @@ from .ml_predictions import (
     find_city_historical_data,
     forecast_temperature_from_csv,
 )
+from .lstm_predictions import(
+    forecast_temperature_lstm
+)
 from .utils import format_future_times, calculate_temp_percentage
 from .capitals import get_capital_city, get_all_capital_cities, get_all_countries_and_capitals, get_capital_coordinates, get_all_capitals_with_coordinates
 from .historical_weather import (

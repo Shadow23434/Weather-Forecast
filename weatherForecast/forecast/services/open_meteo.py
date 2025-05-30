@@ -30,7 +30,7 @@ def fetch_open_meteo_historical(latitude, longitude, start_date=None, end_date=N
             start_date=start_date,
             end_date=end_date,
             days_back=days_back,
-            max_days=3650  # Open-Meteo supports up to 10 years of historical data
+            max_days=7300  # Open-Meteo supports up to 20 years of historical data
         )
         
         if not is_valid:

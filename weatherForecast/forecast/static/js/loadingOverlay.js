@@ -1,36 +1,28 @@
-// Loading overlay functionality
-const loadingOverlay = document.getElementById('loadingOverlay');
-const searchForm = document.getElementById('searchForm');
-
-// Show loading overlay
-function showLoading() {
-    loadingOverlay.classList.add('show');
-    document.body.style.overflow = 'hidden'; // Prevent scrolling while loading
+// Function to show loading overlay
+function showLoadingOverlay() {
+    const overlay = document.getElementById('loadingOverlay');
+    if (overlay) {
+        overlay.classList.add('show');
+    }
 }
 
-// Hide loading overlay
-function hideLoading() {
-    loadingOverlay.classList.remove('show');
-    document.body.style.overflow = ''; // Restore scrolling
+// Function to hide loading overlay
+function hideLoadingOverlay() {
+    const overlay = document.getElementById('loadingOverlay');
+    if (overlay) {
+        overlay.classList.remove('show');
+    }
 }
 
-// Handle form submission
-searchForm.addEventListener('submit', function (e) {
-    // Show loading overlay when form is submitted
-    showLoading();
-
-    // The form will continue to submit normally
-    // The loading overlay will be visible until the page reloads
-});
-
-// Handle page load
+// Add event listener to search form
 document.addEventListener('DOMContentLoaded', function () {
-    // Hide loading overlay when page is fully loaded
-    hideLoading();
+    const searchForm = document.getElementById('searchForm');
+    if (searchForm) {
+        searchForm.addEventListener('submit', function () {
+            showLoadingOverlay();
+        });
+    }
 });
 
-// Handle page unload
-window.addEventListener('beforeunload', function () {
-    // Show loading overlay when navigating away
-    showLoading();
-}); 
+// Export functions for use in other modules
+export { showLoadingOverlay, hideLoadingOverlay }; 
